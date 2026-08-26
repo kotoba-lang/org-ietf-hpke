@@ -1,0 +1,8 @@
+{
+  "name": "org-ietf-hpke",
+  "private": true,
+  "description": "RFC 9180 HPKE in portable .cljc",
+  "scripts": {
+    "test:cljs": "nbb --classpath \"$(clojure -A:cljs -Spath)\" scripts/verify-cljs.cljs"
+  }
+}

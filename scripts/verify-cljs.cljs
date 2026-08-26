@@ -1,0 +1,23 @@
+#!/usr/bin/env nbb
+;; Run the suite on the ClojureScript side.
+;;
+;; Not a formality. Everything under this library is per-runtime somewhere:
+;; org-nist-sha2's 32-bit rotations, x25519's field (a `long-array` there, a
+;; `Float64Array` here), and chacha20's words. HPKE itself adds one of its
+;; own -- the sequence-number limit is 2^96 in the RFC and neither runtime
+;; can hold that, so `compute-nonce` builds its big-endian bytes by division
+;; rather than against powers of 256.
+;;
+;;   nbb --classpath "$(clojure -A:cljs -Spath)" scripts/verify-cljs.cljs
+(ns verify-cljs
+  (:require [clojure.test :as t]
+            [hpke.core-test]))
+
+(defmethod t/report [:cljs.test/default :end-run-tests] [m]
+  (println)
+  (if (t/successful? m)
+    (println "all checks passed on the ClojureScript path")
+    (do (println "FAILED on the ClojureScript path")
+        (js/process.exit 1))))
+
+(t/run-tests 'hpke.core-test)
