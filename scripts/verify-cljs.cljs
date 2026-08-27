@@ -11,7 +11,8 @@
 ;;   nbb --classpath "$(clojure -A:cljs -Spath)" scripts/verify-cljs.cljs
 (ns verify-cljs
   (:require [clojure.test :as t]
-            [hpke.core-test]))
+            [hpke.core-test]
+            [hpke.rfc9180-test]))
 
 (defmethod t/report [:cljs.test/default :end-run-tests] [m]
   (println)
@@ -20,4 +21,4 @@
     (do (println "FAILED on the ClojureScript path")
         (js/process.exit 1))))
 
-(t/run-tests 'hpke.core-test)
+(t/run-tests 'hpke.core-test 'hpke.rfc9180-test)
