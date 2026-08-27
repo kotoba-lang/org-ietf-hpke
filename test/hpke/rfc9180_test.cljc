@@ -85,6 +85,9 @@
 
 ;; ── the four modes ───────────────────────────────────────────────────────────
 
+(defn- vecs [app k] (get-in rfc/by-appendix [app k]))
+(def ^:private suite-of {:a1 hpke/aes-128-gcm :a2 hpke/chacha20-poly1305})
+
 (deftest a2-1-base
   (let [v (:base rfc/vectors)
         eph (kp v :ikme :skem :pkem)
@@ -309,3 +312,104 @@
             s (hpke/seal-auth-psk (:public r) [] aad pt psk psk-id eph snd)]
         (is (= pt (:bytes (hpke/open-auth-psk (:enc s) r [] aad (:bytes s)
                                               psk psk-id (:public snd)))))))))
+
+;; ── the AEAD is a parameter, and A.1 proves it ───────────────────────────────
+;;
+;; A.1 and A.2 are the same KEM and the same KDF. They differ in one
+;; identifier, and that identifier is inside `suite_id`, which is inside
+;; every LabeledExtract and LabeledExpand in the key schedule. So running
+;; both is the cheapest possible check that the suite is a value here rather
+;; than a constant somewhere: nothing about these two sections can be made to
+;; agree by accident.
+
+(deftest both-appendices-all-four-modes
+  (doseq [app [:a1 :a2]
+          [k mode-n] {:base 0 :psk 1 :auth 2 :auth-psk 3}]
+    (let [s (suite-of app)
+          v (vecs app k)
+          info (h (:info v))
+          psk (when (:psk v) (h (:psk v)))
+          psk-id (when (:psk-id v) (h (:psk-id v)))
+          eph (dhkem/derive-key-pair (h (:ikme v)))
+          r (dhkem/derive-key-pair (h (:ikmr v)))
+          snd (when (:ikms v) (dhkem/derive-key-pair (h (:ikms v))))]
+      (testing (str (name app) " " (name k))
+        (is (= mode-n (n (:mode v))) "the section is the mode it says")
+        (is (= (n (:aead-id v)) (:aead-id s)) "and the AEAD this suite names")
+
+        (let [setup (case k
+                      :base (hpke/setup-base-sender s (:public r) info eph)
+                      :psk (hpke/setup-psk-sender s (:public r) info psk psk-id eph)
+                      :auth (hpke/setup-auth-sender s (:public r) info eph snd)
+                      :auth-psk (hpke/setup-auth-psk-sender s (:public r) info psk psk-id eph snd))]
+          (is (= :ok (:status setup)))
+          (is (= (:enc v) (x (:enc setup))) "enc")
+          (check-context v (:context setup) "sender")
+          (check-encryptions v (:context setup))
+          (check-exports v (:context setup)))
+
+        (let [rc (case k
+                   :base (hpke/setup-base-recipient s (h (:enc v)) r info)
+                   :psk (hpke/setup-psk-recipient s (h (:enc v)) r info psk psk-id)
+                   :auth (hpke/setup-auth-recipient s (h (:enc v)) r info (:public snd))
+                   :auth-psk (hpke/setup-auth-psk-recipient s (h (:enc v)) r info psk psk-id (:public snd)))]
+          (is (= :ok (:status rc)))
+          (check-context v (:context rc) "recipient")
+          (check-encryptions v (:context rc)))))))
+
+(deftest the-aeads-are-actually-different
+  (testing "A.1 keys are 16 bytes and A.2's are 32 — Nk follows the suite"
+    (is (= 32 (count (h (:key (vecs :a2 :base)))))) 
+    (is (= 16 (count (h (:key (vecs :a1 :base)))))))
+
+  (testing "the same inputs under two AEADs derive unrelated key schedules"
+    ;; Same shared secret, same info, same mode. Only aead_id differs, and it
+    ;; differs inside suite_id, so every derived byte does.
+    (let [ss (vec (range 32))
+          a (hpke/key-schedule hpke/aes-128-gcm hpke/mode-base ss [] [] [])
+          c (hpke/key-schedule hpke/chacha20-poly1305 hpke/mode-base ss [] [] [])]
+      (is (= 16 (count (:key a))))
+      (is (= 32 (count (:key c))))
+      (is (not= (:base-nonce a) (:base-nonce c)))
+      (is (not= (:exporter-secret a) (:exporter-secret c)))
+      (is (not= (:key-schedule-context a) (:key-schedule-context c))
+          "and so does the context: suite_id is an input to LabeledExtract, so
+           the AEAD identifier reaches psk_id_hash and info_hash too")))
+
+  (testing "which the RFC's own two sections confirm"
+    ;; Same mode byte, same KEM, same KDF, same info, same empty psk_id --
+    ;; and the published contexts differ, in every mode. If they did not,
+    ;; the assertion above would be a statement about this implementation
+    ;; rather than about HPKE.
+    (doseq [k [:base :psk :auth :auth-psk]]
+      (is (not= (:key-schedule-context (vecs :a1 k))
+                (:key-schedule-context (vecs :a2 k)))
+          (str (name k) ": A.1 and A.2 publish different contexts"))
+      (is (= (subs (:key-schedule-context (vecs :a1 k)) 0 2)
+             (subs (:key-schedule-context (vecs :a2 k)) 0 2))
+          (str (name k) ": but the same leading mode byte"))))
+
+  (testing "the registry lists only what can run"
+    (is (= #{0x0001 0x0002 0x0003} (set (keys hpke/suites))))
+    (is (every? fn? (map :seal (vals hpke/suites))))
+    (is (every? fn? (map :open (vals hpke/suites))))))
+
+(deftest aes-256-gcm-round-trips-though-the-rfc-does-not-publish-it
+  ;; RFC 9180 has no X25519 + AES-256-GCM section, so this is a round-trip
+  ;; and a suite-separation check, not a known-answer test. It is labelled
+  ;; that way on purpose: the two above ARE known-answer tests and this one
+  ;; is not, and a reader should not have to infer which is which.
+  (let [v (vecs :a2 :base)
+        r (dhkem/derive-key-pair (h (:ikmr v)))
+        eph (dhkem/derive-key-pair (h (:ikme v)))
+        pt (h "48656c6c6f20776f726c64") aad (h "0102")
+        s (hpke/setup-auth-sender hpke/aes-256-gcm (:public r) [] eph r)]
+    (is (= :ok (:status s)))
+    (is (= 32 (count (:key (:context s)))))
+    (let [sealed (hpke/seal (:context s) aad pt)
+          rc (hpke/setup-auth-recipient hpke/aes-256-gcm (:enc s) r [] (:public r))]
+      (is (= pt (:bytes (hpke/open (:context rc) aad (:bytes sealed)))))
+      (testing "and a different AEAD does not open it"
+        (let [wrong (hpke/setup-auth-recipient hpke/aes-128-gcm (:enc s) r [] (:public r))]
+          (is (= :authentication-failed
+                 (:reason (hpke/open (:context wrong) aad (:bytes sealed))))))))))

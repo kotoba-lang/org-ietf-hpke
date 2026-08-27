@@ -3,9 +3,14 @@
 **[RFC 9180](https://www.rfc-editor.org/rfc/rfc9180) HPKE — Hybrid Public Key
 Encryption — in portable `.cljc`.**
 
-One cipher suite: **DHKEM(X25519, HKDF-SHA256), HKDF-SHA256,
-ChaCha20Poly1305** (`0x0020 / 0x0001 / 0x0003`). **All four modes**: base,
-PSK, Auth and AuthPSK.
+**DHKEM(X25519, HKDF-SHA256)** and **HKDF-SHA256**, with any of RFC 9180's
+three AEADs, in **all four modes**: base, PSK, Auth and AuthPSK.
+
+| suite | id | Nk |
+|---|---|---|
+| `hpke/aes-128-gcm` | `0x0020 / 0x0001 / 0x0001` | 16 |
+| `hpke/aes-256-gcm` | `0x0020 / 0x0001 / 0x0002` | 32 |
+| `hpke/chacha20-poly1305` *(default)* | `0x0020 / 0x0001 / 0x0003` | 32 |
 
 ## Use
 
@@ -21,6 +26,14 @@ PSK, Auth and AuthPSK.
 
 (def r (hpke/setup-base-recipient (:enc s) kp info))
 (hpke/open (:context r) aad (:bytes m))
+```
+
+The AEAD is an optional leading argument. Omitted, it is
+`chacha20-poly1305` — what this library had before it was a parameter, so an
+existing call site means what it used to:
+
+```clojure
+(hpke/setup-base-sender hpke/aes-128-gcm (:public kp) info eph)
 ```
 
 The other three modes are the same shape with the inputs they add:
@@ -80,39 +93,49 @@ a mode that ignores it, and a mode that needs one and did not get it are four
 distinct refusals. The third matters most: a silently dropped secret is worse
 than an absent one, because the caller believes it is in force.
 
-## Why one suite and four modes
+## What is a parameter, and what is still not
 
-**The suite is one** because every other needs a primitive that does not
-exist here as an implementation. **AES-GCM**, **P-256 / P-384 / P-521** and
-**X448** have no portable form in this workspace — measured, not assumed:
-`btc-crypto`'s curve arithmetic is `#?(:clj)`-only over `java.math.BigInteger`
-and every AES in the tree is Node's `crypto`. `HKDF-SHA384` additionally
-wants an `hmac-sha384` that `org-nist-sha2` does not yet expose. A suite
-table listing identifiers nothing can execute is the kind of completeness
-that reads as capability.
+**The AEAD is.** `kotoba-lang/org-nist-aes` exists now, and its `seal`/`open`
+have the same signature and result shape as `chacha20.aead`'s, so the suite
+carries the two functions themselves rather than a keyword dispatched
+somewhere else. There is nothing left for a dispatch layer to do except be a
+place for the two to drift apart.
 
-SHA-384 and SHA-512 themselves **are** here, in `sha2.sha512`. An earlier
-version of this file listed them among the missing primitives. That was true
-when it was written and stopped being true without the sentence changing,
-which is the ordinary way a "why not" section becomes wrong.
+**The KEM and the KDF are not**, and the reason is evidence rather than
+effort:
 
-**The modes are four** because RFC 9180 Appendix **A.2 is exactly this
-suite** and publishes vectors for all of them. The earlier argument for
-shipping base alone — that the others would be three untested code paths —
-was an argument about evidence, and the evidence was in the specification the
-whole time.
+- `HKDF-SHA384` and `HKDF-SHA512` would *run* — `org-nist-sha2` has both
+  hashes and, since `hmac-sha384`, both MACs. But RFC 9180 publishes no
+  vector for **this KEM** with either, so they would run against nothing.
+- **P-256 / P-384 / P-521** and **X448** have no portable implementation in
+  this workspace. Measured, not assumed: `btc-crypto`'s curve arithmetic is
+  `#?(:clj)`-only over `java.math.BigInteger` and its `:cljs` branch throws.
+
+`hpke/suites` therefore lists three. A suite table listing identifiers
+nothing can execute is the kind of completeness that reads as capability.
+
+*(SHA-384 and SHA-512 themselves are in `sha2.sha512`. An earlier version of
+this file listed them among the missing primitives — true when written, and
+it stopped being true without the sentence changing, which is the ordinary
+way a "why not" section becomes wrong.)*
+
+**The modes are four** because A.1 and A.2 both publish all of them. The
+earlier argument for shipping base alone — that the others would be three
+untested code paths — was an argument about evidence, and the evidence was in
+the specification the whole time.
 
 There is no branch on `mode` in the key schedule. A mode is a value that
 leads `key_schedule_context`, so the three added modes cannot drift from the
 one that was already tested.
 
-## Dependencies — three, all first-party, all implementations
+## Dependencies — four, all first-party, all implementations
 
 | | |
 |---|---|
 | `org-nist-sha2` | SHA-256 and HMAC-SHA256 |
 | `org-ietf-x25519` | the KEM's Diffie-Hellman |
-| `org-ietf-chacha20-poly1305` | the AEAD |
+| `org-ietf-chacha20-poly1305` | one AEAD |
+| `org-nist-aes` | the other two |
 
 **Not `kotoba-lang/crypto`**: its `hkdf` hardcodes a **zero salt**, and RFC
 9180's key schedule passes a real one (`LabeledExtract(shared_secret,
@@ -133,16 +156,17 @@ nbb --classpath "$(clojure -A:cljs -Spath)" scripts/verify-cljs.cljs   # Clojure
 clojure -M:oracle                                                      # + differential vs BouncyCastle
 ```
 
-**404 assertions, both runtimes, 0 failures.**
+**1,034 assertions, both runtimes, 0 failures. 1,221 with the oracle.**
 
 ### Where the vectors come from
 
 `test/hpke/rfc9180_a2.cljc` is **generated** by
 `scripts/extract_rfc9180.cljs` from RFC 9180's plain text, pinned by sha256
-(`f45a8b7c…f1f8f6`). It carries Appendix A.2 verbatim: for each of the four
-modes, every `ikm` and the key pair it derives to, `enc`, `shared_secret`,
-`key_schedule_context`, `secret`, `key`, `base_nonce`, `exporter_secret`, six
-encryptions and three exports.
+(`f45a8b7c…f1f8f6`). It carries Appendices **A.1 and A.2** verbatim — the
+same KEM and KDF with AES-128-GCM and with ChaCha20Poly1305 — and for each of
+the four modes of each: every `ikm` and the key pair it derives to, `enc`,
+`shared_secret`, `key_schedule_context`, `secret`, `key`, `base_nonce`,
+`exporter_secret`, six encryptions and three exports.
 
 **Transcription is mechanical because transcription is the step that failed
 here.** An earlier suite claimed its vectors were A.2 verbatim and they were
@@ -164,6 +188,8 @@ Measured by breaking one thing at a time and running it:
 | drop the mode byte from `key_schedule_context` | **245** | all four modes, and `modes-do-not-collide` |
 | swap `pkRm`/`pkSm` in the auth `kem_context` | **64** | auth and auth-psk **only** |
 | drop the second DH from `auth-encap` | **64** | auth and auth-psk **only** |
+| ignore the context's suite in `seal` | **97** | both appendices, and AES-256-GCM |
+| drop `aead_id` from `suite_id` | **718** | everything |
 | salt `LabeledExtract(…"secret"…)` with the psk instead of the shared secret | **235** | all four modes |
 | *(restored)* | **0** | none |
 
@@ -194,8 +220,14 @@ obvious form throws at namespace load, before any nonce is computed.
 what makes a test vector possible. Producing the 32 random bytes is a
 capability, and a leaf does not have one.
 
-**A registry of suites.** See above: the identifiers here are the ones this
-can run.
+**A registry of suites beyond three.** See above: the identifiers here are
+the ones this can run.
+
+**AES-256-GCM as a known-answer test.** RFC 9180 has no X25519 +
+AES-256-GCM section, so that suite is covered by a round-trip and a
+suite-separation check and is labelled as such in the test that does it. A
+reader should not have to work out which of two adjacent tests is anchored
+to a specification and which is not.
 
 **The consumers.** TLS-ECH, ODoH and MLS are what RFC 9180 was written for,
 and none of them exist in this workspace yet. This is the primitive they
