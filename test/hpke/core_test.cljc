@@ -24,8 +24,8 @@
 (def ikm-r (h "6db9df30aa07dd42ee5e8181afdb977e538f5e1fec8a06223f33f7013e525037"))
 (def info (h "4f6465206f6e2061204772656369616e2055726e"))
 
-(def kp-e (delay (dhkem/derive-key-pair ikm-e)))
-(def kp-r (delay (dhkem/derive-key-pair ikm-r)))
+(def kp-e (delay (dhkem/derive-key-pair! dhkem/x25519-hkdf-sha256 ikm-e)))
+(def kp-r (delay (dhkem/derive-key-pair! dhkem/x25519-hkdf-sha256 ikm-r)))
 
 ;; ── DeriveKeyPair, against the RFC's published keys ──────────────────────────
 
@@ -140,20 +140,20 @@
 
 (deftest hkdf-rfc-5869
   (testing "RFC 5869 Appendix A.1 -- basic SHA-256"
-    (let [prk (kdf/extract (h "000102030405060708090a0b0c") (h "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"))]
+    (let [prk (kdf/extract kdf/hkdf-sha256 (h "000102030405060708090a0b0c") (h "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"))]
       (is (= "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5"
              (hpke/hex prk)))
       (is (= (str "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf"
                   "34007208d5b887185865")
-             (hpke/hex (kdf/expand! prk (h "f0f1f2f3f4f5f6f7f8f9") 42))))))
+             (hpke/hex (kdf/expand! kdf/hkdf-sha256 prk (h "f0f1f2f3f4f5f6f7f8f9") 42))))))
   (testing "RFC 5869 A.3 -- zero-length salt and info"
-    (let [prk (kdf/extract [] (h "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"))]
+    (let [prk (kdf/extract kdf/hkdf-sha256 [] (h "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"))]
       (is (= "19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04"
              (hpke/hex prk)))
       (is (= (str "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d"
                   "9d201395faa4b61a96c8")
-             (hpke/hex (kdf/expand! prk [] 42))))))
+             (hpke/hex (kdf/expand! kdf/hkdf-sha256 prk [] 42))))))
   (testing "expand refuses past 255 blocks rather than wrapping its counter"
     (is (= :expand-length-too-large
-           (:reason (kdf/expand (vec (repeat 32 0)) [] (inc (* 255 32))))))
-    (is (= :ok (:status (kdf/expand (vec (repeat 32 0)) [] (* 255 32)))))))
+           (:reason (kdf/expand kdf/hkdf-sha256 (vec (repeat 32 0)) [] (inc (* 255 32))))))
+    (is (= :ok (:status (kdf/expand kdf/hkdf-sha256 (vec (repeat 32 0)) [] (* 255 32)))))))
