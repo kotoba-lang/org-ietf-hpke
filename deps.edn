@@ -2,7 +2,9 @@
 ;; rather than seams:
 ;;
 ;;   org-nist-sha2               SHA-256 and HMAC-SHA256, portable
-;;   org-ietf-x25519             the KEM's Diffie-Hellman
+;;   org-ietf-x25519             one KEM's Diffie-Hellman
+;;   org-ietf-x448               another
+;;   org-nist-ecc                the three NIST ones
 ;;   org-ietf-chacha20-poly1305  one AEAD
 ;;   org-nist-aes                the other two
 ;;
@@ -21,7 +23,13 @@
          :git/sha "599e4733be1a2b6539be8dd0704771cdbdef4d63"}
         io.github.kotoba-lang/org-nist-aes
         {:git/url "https://github.com/kotoba-lang/org-nist-aes.git"
-         :git/sha "7834b2f04729ab77259da26a8d728fe3595f041e"}}
+         :git/sha "7834b2f04729ab77259da26a8d728fe3595f041e"}
+        io.github.kotoba-lang/org-nist-ecc
+        {:git/url "https://github.com/kotoba-lang/org-nist-ecc.git"
+         :git/sha "b255b97f99e5eb21eb12a632b3e589ed224a7977"}
+        io.github.kotoba-lang/org-ietf-x448
+        {:git/url "https://github.com/kotoba-lang/org-ietf-x448.git"
+         :git/sha "929a789f03823eb2baf81aaaa3d9b2c44e046b83"}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner

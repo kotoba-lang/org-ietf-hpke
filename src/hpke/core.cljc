@@ -73,57 +73,59 @@
 
 (def default-psk-id [])
 
-(def kdf-id
-  "HKDF-SHA256. Still a constant, and the reason is evidence rather than
-  effort: RFC 9180 publishes no vector for this KEM with HKDF-SHA384 or
-  HKDF-SHA512. `org-nist-sha2` has the hashes and the MACs for both, so the
-  code would run — against nothing. See the README."
-  0x0001)
+;; ── the AEADs ────────────────────────────────────────────────────────────────
 
-;; ── the AEAD is a parameter ──────────────────────────────────────────────────
-;;
-;; A suite is a value. `seal` and `open` are the functions themselves rather
-;; than a keyword dispatched somewhere else, because the two AEADs already
-;; agree on their signature and their result shape -- `chacha20.aead` and
-;; `aes.gcm` were written to -- so there is nothing left for a dispatch layer
-;; to do except be a place for the two to drift apart.
+(def aes-128-gcm {:aead-id 0x0001 :nk 16 :nn 12 :nt 16 :seal gcm/seal :open gcm/open})
+(def aes-256-gcm {:aead-id 0x0002 :nk 32 :nn 12 :nt 16 :seal gcm/seal :open gcm/open})
+(def chacha20-poly1305 {:aead-id 0x0003 :nk 32 :nn 12 :nt 16 :seal aead/seal :open aead/open})
 
-(defn- suite-id-for [aead-id]
-  (vec (concat (kdf/ascii "HPKE")
-               [(quot dhkem/kem-id 256) (mod dhkem/kem-id 256)]
-               [(quot kdf-id 256) (mod kdf-id 256)]
-               [(quot aead-id 256) (mod aead-id 256)])))
+(defn- export-only-error [& _]
+  {:status :error :reason :export-only-aead})
 
-(defn- suite [aead-id nk seal-fn open-fn]
-  {:kem-id dhkem/kem-id :kdf-id kdf-id :aead-id aead-id
-   :nk nk :nn 12 :nt 16 :nh 32
-   :suite-id (suite-id-for aead-id)
-   :seal seal-fn :open open-fn})
+(def export-only
+  "RFC 9180 §7.3, identifier `0xFFFF`.
 
-(def aes-128-gcm  (suite 0x0001 16 gcm/seal gcm/open))
-(def aes-256-gcm  (suite 0x0002 32 gcm/seal gcm/open))
-(def chacha20-poly1305 (suite 0x0003 32 aead/seal aead/open))
+  A suite that cannot encrypt. `Nk` and `Nn` are zero, no key or base nonce is
+  derived, and `seal` and `open` refuse. It exists for callers that want HPKE
+  only as a key agreement — `export` gives them independent secrets and they
+  bring their own record layer.
+
+  The refusal is a value, not an omission. A missing `:seal` would give a
+  caller a null-pointer at the moment they tried to send something; this gives
+  them `:export-only-aead`."
+  {:aead-id 0xFFFF :nk 0 :nn 0 :nt 0 :seal export-only-error :open export-only-error})
+
+(def aeads
+  {0x0001 aes-128-gcm 0x0002 aes-256-gcm 0x0003 chacha20-poly1305 0xFFFF export-only})
+
+;; ── a suite ──────────────────────────────────────────────────────────────────
+
+(defn suite
+  "`{:kem … :kdf … :aead …}` plus the `suite_id` the three of them determine."
+  [kem the-kdf aead]
+  (let [ids [(:kem-id kem) (:kdf-id the-kdf) (:aead-id aead)]]
+    {:kem kem :kdf the-kdf :aead aead
+     :kem-id (:kem-id kem) :kdf-id (:kdf-id the-kdf) :aead-id (:aead-id aead)
+     :nk (:nk aead) :nn (:nn aead) :nt (:nt aead) :nh (:nh the-kdf)
+     :suite-id (vec (concat (kdf/ascii "HPKE")
+                            (mapcat (fn [i] [(quot i 256) (mod i 256)]) ids)))}))
 
 (def default-suite
-  "ChaCha20Poly1305 — the suite this library had before the AEAD became a
-  parameter, kept as the default so every existing call site means what it
-  used to mean."
-  chacha20-poly1305)
-
-(def suites
-  "The three that can actually run, by identifier. Nothing else is listed;
-  a table of identifiers with no implementation behind them is the failure
-  this repository's README is about."
-  {0x0001 aes-128-gcm 0x0002 aes-256-gcm 0x0003 chacha20-poly1305})
-
-(def nk 32)   ; ChaCha20Poly1305 key — kept for callers that read it
-(def nn 12)   ; nonce, the same in all three
-(def nt 16)   ; tag, the same in all three
-(def nh 32)   ; HKDF-SHA256 output
+  "DHKEM(X25519, HKDF-SHA256) / HKDF-SHA256 / ChaCha20Poly1305 — what this
+  library had when it had one suite, kept as the default so every existing
+  call site means what it used to."
+  (suite dhkem/x25519-hkdf-sha256 kdf/hkdf-sha256 chacha20-poly1305))
 
 (def suite-id
   "The default suite's `suite_id`. Use `(:suite-id s)` for any other."
   (:suite-id default-suite))
+
+(def nk 32)   ; the default suite's key length, kept for callers that read it
+(def nn 12)
+(def nt 16)
+(def nh 32)
+
+;; ── the key schedule ─────────────────────────────────────────────────────────
 
 (defn psk-inputs-error
   "RFC 9180 §5.1 `VerifyPSKInputs`. Returns `nil` when the inputs are
@@ -155,12 +157,15 @@
 (defn key-schedule
   "RFC 9180 §5.1.
 
-  The two-argument form is base mode, unchanged. The five-argument form is
-  the general one, and it is the same computation — the modes differ only in
-  the leading byte of `key_schedule_context` and in whether `psk` and
-  `psk_id` are empty. There is no branch below, which is the point: a mode is
-  a value here, not a code path, so the three added modes cannot drift from
-  the one that was already tested.
+  The two- and five-argument forms are the default suite. The six-argument
+  form takes any. There is no branch on the mode below, which is the point: a
+  mode is a value that leads `key_schedule_context`, so the four modes cannot
+  drift from one another.
+
+  For an export-only suite (`Nk = 0`) no key and no base nonce are derived —
+  the RFC does not define them there, and deriving something unused would put
+  two more `LabeledExpand` calls between a caller and a specification they can
+  check against.
 
   `:key-schedule-context` is kept in the returned context. It is not secret —
   it is the mode byte and two hashes, and RFC 9180 publishes it as a test
@@ -179,24 +184,25 @@
   ([s mode shared-secret info psk psk-id]
    (when-let [e (psk-inputs-error mode psk psk-id)]
      (throw (ex-info (str "hpke: " (name (:reason e))) e)))
-   (let [sid (:suite-id s)
-         psk-id-hash (kdf/labeled-extract sid [] "psk_id_hash" psk-id)
-         info-hash (kdf/labeled-extract sid [] "info_hash" info)
+   (let [k (:kdf s) sid (:suite-id s)
+         psk-id-hash (kdf/labeled-extract k sid [] "psk_id_hash" psk-id)
+         info-hash (kdf/labeled-extract k sid [] "info_hash" info)
          ks-context (vec (concat [mode] psk-id-hash info-hash))
-         secret (kdf/labeled-extract sid shared-secret "secret" psk)]
-     {:key (kdf/labeled-expand sid secret "key" ks-context (:nk s))
-      :base-nonce (kdf/labeled-expand sid secret "base_nonce" ks-context (:nn s))
-      :exporter-secret (kdf/labeled-expand sid secret "exp" ks-context (:nh s))
-      :key-schedule-context ks-context
-      :suite s
-      :seq 0})))
+         secret (kdf/labeled-extract k sid shared-secret "secret" psk)]
+     (cond-> {:exporter-secret (kdf/labeled-expand k sid secret "exp" ks-context (:nh s))
+              :key-schedule-context ks-context
+              :suite s
+              :seq 0}
+       (pos? (:nk s))
+       (assoc :key (kdf/labeled-expand k sid secret "key" ks-context (:nk s))
+              :base-nonce (kdf/labeled-expand k sid secret "base_nonce" ks-context (:nn s)))))))
 
 (defn- compute-nonce
   "RFC 9180 §5.2: `base_nonce XOR I2OSP(seq, Nn)`.
 
   The big-endian bytes are produced by repeated division rather than by
-  multiplying `seq` against powers of 256. `256^11` is 2^88, which overflows
-  a JVM long the moment it is formed and is not an exact integer under
+  multiplying `seq` against powers of 256. `256^11` is 2^88, which overflows a
+  JVM long the moment it is formed and is not an exact integer under
   ClojureScript — so writing the obvious `(* seq (expt 256 k))` throws at
   namespace load, before any nonce is computed."
   [base-nonce n]
@@ -211,9 +217,9 @@
 
   RFC 9180 §5.2 puts the limit at 2^(8*Nn) - 1, which for Nn = 12 is 2^96 -
   and neither runtime can hold that: a JVM long stops at 2^63 and a
-  ClojureScript number stops being an exact integer at 2^53. So the real
-  limit is the smaller of those, and it is stated as such rather than as a
-  constant that cannot be formed.
+  ClojureScript number stops being an exact integer at 2^53. So the real limit
+  is the smaller of those, and it is stated as such rather than as a constant
+  that cannot be formed.
 
   This is not a shortcut. At one message per nanosecond, 2^53 takes over two
   hundred years; the RFC's bound was never the binding one."
@@ -223,13 +229,15 @@
   "Encrypt with `ctx`. Returns `{:status :ok :bytes ct :context ctx'}` — the
   new context carries the advanced sequence number."
   [ctx aad pt]
-  (if (>= (:seq ctx) max-seq)
-    {:status :error :reason :message-limit-reached :seq (:seq ctx)}
-    (let [r ((:seal (:suite ctx default-suite))
-             (:key ctx) (compute-nonce (:base-nonce ctx) (:seq ctx)) aad pt)]
-      (if (= :ok (:status r))
-        {:status :ok :bytes (:bytes r) :context (update ctx :seq inc)}
-        r))))
+  (let [s (:suite ctx default-suite)]
+    (cond
+      (zero? (:nk s)) {:status :error :reason :export-only-aead}
+      (>= (:seq ctx) max-seq) {:status :error :reason :message-limit-reached :seq (:seq ctx)}
+      :else
+      (let [r ((:seal (:aead s)) (:key ctx) (compute-nonce (:base-nonce ctx) (:seq ctx)) aad pt)]
+        (if (= :ok (:status r))
+          {:status :ok :bytes (:bytes r) :context (update ctx :seq inc)}
+          r)))))
 
 (defn open
   "Decrypt with `ctx`. Returns `{:status :ok :bytes pt :context ctx'}`.
@@ -238,22 +246,26 @@
   not consume a nonce, or an attacker could desynchronise the two sides by
   injecting garbage."
   [ctx aad ct]
-  (if (>= (:seq ctx) max-seq)
-    {:status :error :reason :message-limit-reached :seq (:seq ctx)}
-    (let [r ((:open (:suite ctx default-suite))
-             (:key ctx) (compute-nonce (:base-nonce ctx) (:seq ctx)) aad ct)]
-      (if (= :ok (:status r))
-        {:status :ok :bytes (:bytes r) :context (update ctx :seq inc)}
-        r))))
+  (let [s (:suite ctx default-suite)]
+    (cond
+      (zero? (:nk s)) {:status :error :reason :export-only-aead}
+      (>= (:seq ctx) max-seq) {:status :error :reason :message-limit-reached :seq (:seq ctx)}
+      :else
+      (let [r ((:open (:aead s)) (:key ctx) (compute-nonce (:base-nonce ctx) (:seq ctx)) aad ct)]
+        (if (= :ok (:status r))
+          {:status :ok :bytes (:bytes r) :context (update ctx :seq inc)}
+          r)))))
 
 (defn export
   "RFC 9180 §5.3 — derive an independent secret from the context.
 
   Does not touch the sequence number: exporting is not sending, and a caller
-  that exports between messages must not shift the nonce."
+  that exports between messages must not shift the nonce. Available in every
+  suite including the export-only one, which is what that suite is for."
   [ctx exporter-context length]
-  (kdf/labeled-expand (:suite-id (:suite ctx default-suite))
-                      (:exporter-secret ctx) "sec" exporter-context length))
+  (let [s (:suite ctx default-suite)]
+    (kdf/labeled-expand (:kdf s) (:suite-id s) (:exporter-secret ctx)
+                        "sec" exporter-context length)))
 
 ;; ── setup ────────────────────────────────────────────────────────────────────
 ;;
@@ -268,26 +280,27 @@
 ;; not typecheck is better than a wrong call that returns an error map.
 
 (defn- schedule-from
-  "Shared tail: check the PSK pair, then turn a KEM result into a context."
-  [s kem mode info psk psk-id]
-  (if (not= :ok (:status kem))
-    kem
+  [s kem-result mode info psk psk-id]
+  (if (not= :ok (:status kem-result))
+    kem-result
     (if-let [e (psk-inputs-error mode psk psk-id)]
       e
       (cond-> {:status :ok
-               :context (key-schedule s mode (:shared-secret kem) info psk psk-id)}
-        (:enc kem) (assoc :enc (:enc kem))))))
+               :context (key-schedule s mode (:shared-secret kem-result) info psk psk-id)}
+        (:enc kem-result) (assoc :enc (:enc kem-result))))))
 
 (defn setup-base-sender
   "RFC 9180 §5.1.1. `eph` is the ephemeral key pair — see this namespace's
   docstring on why it is a parameter."
   ([pk-r info eph] (setup-base-sender default-suite pk-r info eph))
-  ([s pk-r info eph] (schedule-from s (dhkem/encap pk-r eph) mode-base info default-psk default-psk-id)))
+  ([s pk-r info eph]
+   (schedule-from s (dhkem/encap (:kem s) pk-r eph) mode-base info default-psk default-psk-id)))
 
 (defn setup-base-recipient
   "RFC 9180 §5.1.1, the receiving half."
   ([enc kp-r info] (setup-base-recipient default-suite enc kp-r info))
-  ([s enc kp-r info] (schedule-from s (dhkem/decap enc kp-r) mode-base info default-psk default-psk-id)))
+  ([s enc kp-r info]
+   (schedule-from s (dhkem/decap (:kem s) enc kp-r) mode-base info default-psk default-psk-id)))
 
 (defn setup-psk-sender
   "RFC 9180 §5.1.2. The PSK authenticates the *recipient* to the sender: only
@@ -295,15 +308,17 @@
   message that opens is a message the intended party received.
 
   `psk-id` is sent in the clear by whatever protocol carries `enc`, and it is
-  hashed into the context here. It identifies which PSK, and identifying it
-  is not the same as proving possession of it."
+  hashed into the context here. It identifies which PSK, and identifying it is
+  not the same as proving possession of it."
   ([pk-r info psk psk-id eph] (setup-psk-sender default-suite pk-r info psk psk-id eph))
-  ([s pk-r info psk psk-id eph] (schedule-from s (dhkem/encap pk-r eph) mode-psk info psk psk-id)))
+  ([s pk-r info psk psk-id eph]
+   (schedule-from s (dhkem/encap (:kem s) pk-r eph) mode-psk info psk psk-id)))
 
 (defn setup-psk-recipient
   "RFC 9180 §5.1.2, the receiving half."
   ([enc kp-r info psk psk-id] (setup-psk-recipient default-suite enc kp-r info psk psk-id))
-  ([s enc kp-r info psk psk-id] (schedule-from s (dhkem/decap enc kp-r) mode-psk info psk psk-id)))
+  ([s enc kp-r info psk psk-id]
+   (schedule-from s (dhkem/decap (:kem s) enc kp-r) mode-psk info psk psk-id)))
 
 (defn setup-auth-sender
   "RFC 9180 §5.1.3. `kp-s` is the sender's static key pair.
@@ -313,7 +328,9 @@
   byte still separates the context, so the two changes are independent and
   both are needed."
   ([pk-r info eph kp-s] (setup-auth-sender default-suite pk-r info eph kp-s))
-  ([s pk-r info eph kp-s] (schedule-from s (dhkem/auth-encap pk-r eph kp-s) mode-auth info default-psk default-psk-id)))
+  ([s pk-r info eph kp-s]
+   (schedule-from s (dhkem/auth-encap (:kem s) pk-r eph kp-s)
+                  mode-auth info default-psk default-psk-id)))
 
 (defn setup-auth-recipient
   "RFC 9180 §5.1.3, the receiving half. `pk-s` is the sender's static public
@@ -322,22 +339,27 @@
   A wrong `pk-s` produces a context, not an error — see `dhkem/auth-decap`.
   The first `open` is what rejects."
   ([enc kp-r info pk-s] (setup-auth-recipient default-suite enc kp-r info pk-s))
-  ([s enc kp-r info pk-s] (schedule-from s (dhkem/auth-decap enc kp-r pk-s) mode-auth info default-psk default-psk-id)))
+  ([s enc kp-r info pk-s]
+   (schedule-from s (dhkem/auth-decap (:kem s) enc kp-r pk-s)
+                  mode-auth info default-psk default-psk-id)))
 
 (defn setup-auth-psk-sender
   "RFC 9180 §5.1.4 — both at once."
-  ([pk-r info psk psk-id eph kp-s] (setup-auth-psk-sender default-suite pk-r info psk psk-id eph kp-s))
-  ([s pk-r info psk psk-id eph kp-s] (schedule-from s (dhkem/auth-encap pk-r eph kp-s) mode-auth-psk info psk psk-id)))
+  ([pk-r info psk psk-id eph kp-s]
+   (setup-auth-psk-sender default-suite pk-r info psk psk-id eph kp-s))
+  ([s pk-r info psk psk-id eph kp-s]
+   (schedule-from s (dhkem/auth-encap (:kem s) pk-r eph kp-s) mode-auth-psk info psk psk-id)))
 
 (defn setup-auth-psk-recipient
   "RFC 9180 §5.1.4, the receiving half."
-  ([enc kp-r info psk psk-id pk-s] (setup-auth-psk-recipient default-suite enc kp-r info psk psk-id pk-s))
-  ([s enc kp-r info psk psk-id pk-s] (schedule-from s (dhkem/auth-decap enc kp-r pk-s) mode-auth-psk info psk psk-id)))
+  ([enc kp-r info psk psk-id pk-s]
+   (setup-auth-psk-recipient default-suite enc kp-r info psk psk-id pk-s))
+  ([s enc kp-r info psk psk-id pk-s]
+   (schedule-from s (dhkem/auth-decap (:kem s) enc kp-r pk-s) mode-auth-psk info psk psk-id)))
 
 ;; ── single-shot ──────────────────────────────────────────────────────────────
 
-(defn- seal-once
-  [setup aad pt]
+(defn- seal-once [setup aad pt]
   (if (not= :ok (:status setup))
     setup
     (let [r (seal (:context setup) aad pt)]
@@ -345,39 +367,46 @@
         {:status :ok :enc (:enc setup) :bytes (:bytes r)}
         r))))
 
-(defn- open-once
-  [setup aad ct]
-  (if (not= :ok (:status setup))
-    setup
-    (open (:context setup) aad ct)))
+(defn- open-once [setup aad ct]
+  (if (not= :ok (:status setup)) setup (open (:context setup) aad ct)))
 
 (defn seal-base
-  "Set up and seal one message. Returns `{:status :ok :enc … :bytes …}`."
-  [pk-r info aad pt eph]
-  (seal-once (setup-base-sender pk-r info eph) aad pt))
+  ([pk-r info aad pt eph] (seal-base default-suite pk-r info aad pt eph))
+  ([s pk-r info aad pt eph] (seal-once (setup-base-sender s pk-r info eph) aad pt)))
 
 (defn open-base
-  "Set up and open one message."
-  [enc kp-r info aad ct]
-  (open-once (setup-base-recipient enc kp-r info) aad ct))
+  ([enc kp-r info aad ct] (open-base default-suite enc kp-r info aad ct))
+  ([s enc kp-r info aad ct] (open-once (setup-base-recipient s enc kp-r info) aad ct)))
 
-(defn seal-psk [pk-r info aad pt psk psk-id eph]
-  (seal-once (setup-psk-sender pk-r info psk psk-id eph) aad pt))
+(defn seal-psk
+  ([pk-r info aad pt psk psk-id eph] (seal-psk default-suite pk-r info aad pt psk psk-id eph))
+  ([s pk-r info aad pt psk psk-id eph]
+   (seal-once (setup-psk-sender s pk-r info psk psk-id eph) aad pt)))
 
-(defn open-psk [enc kp-r info aad ct psk psk-id]
-  (open-once (setup-psk-recipient enc kp-r info psk psk-id) aad ct))
+(defn open-psk
+  ([enc kp-r info aad ct psk psk-id] (open-psk default-suite enc kp-r info aad ct psk psk-id))
+  ([s enc kp-r info aad ct psk psk-id]
+   (open-once (setup-psk-recipient s enc kp-r info psk psk-id) aad ct)))
 
-(defn seal-auth [pk-r info aad pt eph kp-s]
-  (seal-once (setup-auth-sender pk-r info eph kp-s) aad pt))
+(defn seal-auth
+  ([pk-r info aad pt eph kp-s] (seal-auth default-suite pk-r info aad pt eph kp-s))
+  ([s pk-r info aad pt eph kp-s] (seal-once (setup-auth-sender s pk-r info eph kp-s) aad pt)))
 
-(defn open-auth [enc kp-r info aad ct pk-s]
-  (open-once (setup-auth-recipient enc kp-r info pk-s) aad ct))
+(defn open-auth
+  ([enc kp-r info aad ct pk-s] (open-auth default-suite enc kp-r info aad ct pk-s))
+  ([s enc kp-r info aad ct pk-s] (open-once (setup-auth-recipient s enc kp-r info pk-s) aad ct)))
 
-(defn seal-auth-psk [pk-r info aad pt psk psk-id eph kp-s]
-  (seal-once (setup-auth-psk-sender pk-r info psk psk-id eph kp-s) aad pt))
+(defn seal-auth-psk
+  ([pk-r info aad pt psk psk-id eph kp-s]
+   (seal-auth-psk default-suite pk-r info aad pt psk psk-id eph kp-s))
+  ([s pk-r info aad pt psk psk-id eph kp-s]
+   (seal-once (setup-auth-psk-sender s pk-r info psk psk-id eph kp-s) aad pt)))
 
-(defn open-auth-psk [enc kp-r info aad ct psk psk-id pk-s]
-  (open-once (setup-auth-psk-recipient enc kp-r info psk psk-id pk-s) aad ct))
+(defn open-auth-psk
+  ([enc kp-r info aad ct psk psk-id pk-s]
+   (open-auth-psk default-suite enc kp-r info aad ct psk psk-id pk-s))
+  ([s enc kp-r info aad ct psk psk-id pk-s]
+   (open-once (setup-auth-psk-recipient s enc kp-r info psk psk-id pk-s) aad ct)))
 
 (defn hex [bs] (aead/hex bs))
 (defn unhex [s] (aead/unhex s))

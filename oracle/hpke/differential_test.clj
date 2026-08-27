@@ -37,7 +37,7 @@
 (deftest derive-key-pair-agrees
   (doseq [i (range 25)]
     (let [ikm (lcg (+ 4000 i) 32)
-          mine (dhkem/derive-key-pair ikm)
+          mine (dhkem/derive-key-pair! dhkem/x25519-hkdf-sha256 ikm)
           theirs (.deriveKeyPair bc (ba ikm))]
       (is (= (hpke/hex (.serializePublicKey bc (.getPublic theirs)))
              (hpke/hex (:public mine)))
@@ -51,8 +51,8 @@
     (let [ikm-e (lcg (+ 200 i) 32)
           ikm-r (lcg (+ 900 i) 32)
           info (lcg (+ 30 i) (mod (* 5 i) 23))
-          kp-e (dhkem/derive-key-pair ikm-e)
-          kp-r (dhkem/derive-key-pair ikm-r)
+          kp-e (dhkem/derive-key-pair! dhkem/x25519-hkdf-sha256 ikm-e)
+          kp-r (dhkem/derive-key-pair! dhkem/x25519-hkdf-sha256 ikm-r)
           bc-e (.deriveKeyPair bc (ba ikm-e))
           bc-r (.deriveKeyPair bc (ba ikm-r))
           theirs (.setupBaseS bc (.getPublic bc-r) (ba info) bc-e)
@@ -84,8 +84,8 @@
           info (lcg (+ 44 i) 7)
           aad (lcg (+ 55 i) 5)
           pt (lcg (+ 66 i) (+ 1 (* 9 i)))
-          kp-e (dhkem/derive-key-pair ikm-e)
-          kp-r (dhkem/derive-key-pair ikm-r)
+          kp-e (dhkem/derive-key-pair! dhkem/x25519-hkdf-sha256 ikm-e)
+          kp-r (dhkem/derive-key-pair! dhkem/x25519-hkdf-sha256 ikm-r)
           bc-r (.deriveKeyPair bc (ba ikm-r))
           sealed (hpke/seal-base (:public kp-r) info aad pt kp-e)]
       (is (= :ok (:status sealed)))
