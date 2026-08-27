@@ -26,7 +26,7 @@
          :git/sha "7834b2f04729ab77259da26a8d728fe3595f041e"}
         io.github.kotoba-lang/org-nist-ecc
         {:git/url "https://github.com/kotoba-lang/org-nist-ecc.git"
-         :git/sha "b255b97f99e5eb21eb12a632b3e589ed224a7977"}
+         :git/sha "cf4b09b6da7b673d150b7890a7cee17cfa44b43b"}
         io.github.kotoba-lang/org-ietf-x448
         {:git/url "https://github.com/kotoba-lang/org-ietf-x448.git"
          :git/sha "929a789f03823eb2baf81aaaa3d9b2c44e046b83"}}
