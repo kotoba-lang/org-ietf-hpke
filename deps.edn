@@ -3,7 +3,8 @@
 ;;
 ;;   org-nist-sha2               SHA-256 and HMAC-SHA256, portable
 ;;   org-ietf-x25519             the KEM's Diffie-Hellman
-;;   org-ietf-chacha20-poly1305  the AEAD
+;;   org-ietf-chacha20-poly1305  one AEAD
+;;   org-nist-aes                the other two
 ;;
 ;; NOT kotoba-lang/crypto: its hkdf hardcodes a zero salt, which RFC 9180's
 ;; key schedule needs to vary, and its default digest is a JVM MessageDigest.
@@ -11,13 +12,16 @@
 {:paths ["src"]
  :deps {io.github.kotoba-lang/org-nist-sha2
         {:git/url "https://github.com/kotoba-lang/org-nist-sha2.git"
-         :git/sha "3b4f7e93eff2c438c758383bab440b6f35627e31"}
+         :git/sha "e7c1b250adf3291ef99424fa85d8e7381cb086fb"}
         io.github.kotoba-lang/org-ietf-x25519
         {:git/url "https://github.com/kotoba-lang/org-ietf-x25519.git"
          :git/sha "8c4e1ae7c6f14e5d015bcb8ca80e965ad808d920"}
         io.github.kotoba-lang/org-ietf-chacha20-poly1305
         {:git/url "https://github.com/kotoba-lang/org-ietf-chacha20-poly1305.git"
-         :git/sha "599e4733be1a2b6539be8dd0704771cdbdef4d63"}}
+         :git/sha "599e4733be1a2b6539be8dd0704771cdbdef4d63"}
+        io.github.kotoba-lang/org-nist-aes
+        {:git/url "https://github.com/kotoba-lang/org-nist-aes.git"
+         :git/sha "7834b2f04729ab77259da26a8d728fe3595f041e"}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
