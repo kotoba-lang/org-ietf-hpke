@@ -12,7 +12,12 @@
 ;; key schedule needs to vary, and its default digest is a JVM MessageDigest.
 ;; NOT kotoba-lang/noise: its AEAD is host-injected through provider/.
 {:paths ["src"]
- :deps {io.github.kotoba-lang/org-nist-sha2
+ :deps {
+        ;; kotoba.lang.text, not clojure.string. Pinned as an explicit floor:
+        ;; tools.deps takes the NEWEST sha it is shown, so without a floor here
+        ;; this repo silently rides whatever a sibling happens to name.
+        io.github.kotoba-lang/text {:git/sha "73bdb13ae7a3d004b44bca08be03a3191157a38f"}
+       io.github.kotoba-lang/org-nist-sha2
         {:git/url "https://github.com/kotoba-lang/org-nist-sha2.git"
          :git/sha "e7c1b250adf3291ef99424fa85d8e7381cb086fb"}
         io.github.kotoba-lang/org-ietf-x25519

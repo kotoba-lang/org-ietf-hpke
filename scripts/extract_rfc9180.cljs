@@ -35,7 +35,7 @@
   network is a generator whose output depends on when it ran."
   (:require ["fs" :as fs]
             ["crypto" :as crypto]
-            [clojure.string :as str]))
+            [kotoba.lang.text :as str]))
 
 (def source-url "https://www.rfc-editor.org/rfc/rfc9180.txt")
 
@@ -123,7 +123,7 @@
            "encryptions" (vec encs)
            "exports" (vec exps))))
 
-(defn- kw [s] (keyword (str/replace (str/lower-case s) #"[ _]" "-")))
+(defn- kw [s] (keyword (str/replace (str/lower s) #"[ _]" "-")))
 
 (defn- emit-value [v]
   (cond (vector? v) (str "[" (str/join "\n     " (map emit-value v)) "]")
