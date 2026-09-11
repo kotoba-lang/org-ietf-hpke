@@ -29,7 +29,7 @@
   rather than quietly rewriting the fixtures.
 
       curl -sSo rfc9180.txt https://www.rfc-editor.org/rfc/rfc9180.txt
-      nbb scripts/extract_rfc9180.cljk rfc9180.txt
+      kbb --backend sci scripts/extract_rfc9180.cljk rfc9180.txt
 
   The download is a separate step on purpose: a generator that reaches the
   network is a generator whose output depends on when it ran."
@@ -133,7 +133,7 @@
 (defn -main [& args]
   (let [path (first args)
         _ (when-not path
-            (println "usage: nbb scripts/extract_rfc9180.cljk <rfc9180.txt>")
+            (println "usage: kbb --backend sci scripts/extract_rfc9180.cljk <rfc9180.txt>")
             (println "  curl -sSo rfc9180.txt" source-url)
             (js/process.exit 2))
         text (str (fs/readFileSync path "utf8"))
