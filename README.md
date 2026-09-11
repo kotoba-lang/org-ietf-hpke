@@ -147,7 +147,7 @@ error is what this library's dependency list exists to correct.
 
 ```sh
 clojure -M:test                                                        # JVM
-nbb --classpath "$(clojure -A:cljs -Spath)" scripts/verify-cljs.cljs   # ClojureScript
+nbb --classpath "$(clojure -A:cljs -Spath)" scripts/verify-cljs.cljk   # ClojureScript
 clojure -M:oracle                                                      # + differential vs BouncyCastle
 ```
 
@@ -155,8 +155,8 @@ clojure -M:oracle                                                      # + diffe
 
 ### Where the vectors come from
 
-`test/hpke/rfc9180_vectors.cljc` is **generated** by
-`scripts/extract_rfc9180.cljs` from RFC 9180's plain text, pinned by sha256
+`test/hpke/rfc9180_vectors.cljk` is **generated** by
+`scripts/extract_rfc9180.cljk` from RFC 9180's plain text, pinned by sha256
 (`f45a8b7c…f1f8f6`). It carries **all seven appendices** verbatim, four modes
 each: every `ikm` and the key pair it derives to, `enc`, `shared_secret`,
 `key_schedule_context`, `secret`, `key`, `base_nonce`, `exporter_secret`, six
