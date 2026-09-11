@@ -146,9 +146,9 @@ error is what this library's dependency list exists to correct.
 ## Verify
 
 ```sh
-clojure -M:test                                                        # JVM
-nbb --classpath "$(clojure -A:cljs -Spath)" scripts/verify-cljs.cljk   # ClojureScript
-clojure -M:oracle                                                      # + differential vs BouncyCastle
+kbb -M:test                                                        # JVM
+kbb --backend sci --classpath "$(kbb -A:cljs -Spath)" scripts/verify-cljs.cljk   # ClojureScript
+kbb -M:oracle                                                      # + differential vs BouncyCastle
 ```
 
 **2,423 assertions, both runtimes, 0 failures. 2,610 with the oracle.**
@@ -206,7 +206,7 @@ than about something shared underneath it.
 
 ### The BouncyCastle oracle covers base mode only
 
-`clojure -M:oracle` runs 50 `DeriveKeyPair` comparisons and 12 base-mode
+`kbb -M:oracle` runs 50 `DeriveKeyPair` comparisons and 12 base-mode
 setups against BouncyCastle 1.78.1, including **eight cases where
 BouncyCastle decrypts what this implementation sealed**. It has not been
 extended to the three added modes, and that is stated rather than implied: a

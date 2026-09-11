@@ -6,7 +6,7 @@
   BouncyCastle must never become a dependency: it is what this is CHECKED
   AGAINST, not something it builds on.
 
-      clojure -M:oracle
+      kbb -M:oracle
 
   The known-answer suite pins one ephemeral against one recipient. What it
   leaves untested is everything that varies: other key pairs, other `info`,
